@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gerenciador de Fases do Plano Mestre</title>
+    <title>Gerenciador de Fases do Plano Mestre (Local)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         /* Custom styles for better aesthetics */
@@ -25,22 +25,10 @@
             transition: width 0.5s ease-in-out;
         }
     </style>
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, onSnapshot, setDoc, collection, getDocs, runTransaction, query, where, writeBatch, getDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Configuração inicial do Firebase (Variáveis Globais do Canvas)
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-        
-        let db;
-        let auth;
-        let userId = null;
-        let isAuthReady = false;
-
-        // setLogLevel('debug'); // Ativa logs do Firestore (opcional)
+    <script>
+        // Variável de estado global para guardar o progresso das tarefas
+        let taskData = {};
+        const STORAGE_KEY = 'planoMestreLojaSapatosProgresso';
 
         const statusMap = {
             'Pendente': { color: 'bg-gray-500', next: 'Em Andamento', icon: '⚪️' },
@@ -48,7 +36,7 @@
             'Concluído': { color: 'bg-green-500', next: 'Pendente', icon: '🟢' },
         };
 
-        // Estrutura do Plano Mestre (Baseada no Markdown)
+        // Estrutura do Plano Mestre (a mesma, mas sem referências a IDs de utilizador)
         const projectData = [
             {
                 phaseId: 'F1', title: 'Pilar I: Fundação de Dados e Ferramentas (Fase 1)', items: [
@@ -138,129 +126,72 @@
             }
         ];
 
-        // --- Funções Firebase ---
-        async function initializeFirebase() {
-            if (!firebaseConfig) {
-                console.error("Firebase config is missing.");
-                document.getElementById('tracker-container').innerHTML = '<p class="text-red-500 p-4">Erro: Configuração do Firebase não encontrada.</p>';
-                return;
-            }
-
+        // --- Funções de Armazenamento Local ---
+        
+        // Salva o estado atual de todas as tarefas no localStorage
+        function saveTasksToStorage() {
             try {
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-                
-                await new Promise(resolve => {
-                    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-                        if (user) {
-                            userId = user.uid;
-                        } else if (initialAuthToken) {
-                            await signInWithCustomToken(auth, initialAuthToken).catch(e => {
-                                console.error("Erro ao iniciar sessão com token personalizado:", e);
-                            });
-                            // Re-check auth state after custom sign-in attempt
-                            onAuthStateChanged(auth, (user) => {
-                                if (user) {
-                                    userId = user.uid;
-                                } else {
-                                    signInAnonymously(auth).then(cred => userId = cred.user.uid);
-                                }
-                            });
-                        } else {
-                            await signInAnonymously(auth).then(cred => userId = cred.user.uid);
-                        }
-                        
-                        isAuthReady = true;
-                        unsubscribe();
-                        resolve();
-                    });
-                });
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(taskData));
+                updateUI(); // Atualiza a UI após salvar
+            } catch (e) {
+                console.error("Erro ao salvar no localStorage:", e);
+            }
+        }
 
-                if (userId) {
-                    document.getElementById('user-info').textContent = `ID do Utilizador: ${userId}`;
-                    console.log(`Autenticação concluída. User ID: ${userId}`);
-                    loadTasks();
+        // Carrega o estado das tarefas do localStorage ou usa um objeto vazio como padrão
+        function loadTasksFromStorage() {
+            try {
+                const storedData = localStorage.getItem(STORAGE_KEY);
+                if (storedData) {
+                    taskData = JSON.parse(storedData);
                 } else {
-                    document.getElementById('tracker-container').innerHTML = '<p class="text-red-500 p-4">Erro: Não foi possível obter o User ID após a autenticação.</p>';
+                    taskData = {}; // Começa com um objeto vazio se não houver dados
                 }
-
             } catch (e) {
-                console.error("Erro ao inicializar Firebase:", e);
-                document.getElementById('tracker-container').innerHTML = '<p class="text-red-500 p-4">Erro ao inicializar Firebase. Verifique a consola.</p>';
+                console.error("Erro ao carregar do localStorage:", e);
+                taskData = {};
             }
         }
 
-        function getTaskCollectionRef() {
-            return collection(db, `artifacts/${appId}/users/${userId}/plano_mestre_loja_sapatos_tasks`);
-        }
+        // --- Funções de Lógica da Aplicação ---
 
-        async function updateTaskStatus(taskId, currentStatus) {
-            if (!isAuthReady || !userId) return console.warn("Autenticação não concluída.");
+        function initializeApp() {
+            // Carrega os dados persistentes
+            loadTasksFromStorage();
 
-            const nextStatusKey = statusMap[currentStatus].next;
-            const docRef = doc(getTaskCollectionRef(), taskId);
+            // Renderiza a estrutura da aplicação com os dados carregados
+            renderTracker();
             
-            try {
-                await setDoc(docRef, { status: nextStatusKey, timestamp: new Date().toISOString() }, { merge: true });
-                console.log(`Status da tarefa ${taskId} atualizado para ${nextStatusKey}`);
-            } catch (e) {
-                console.error("Erro ao atualizar status:", e);
-            }
+            // Inicializa o resumo de progresso
+            updateUI();
+            
+            // Remove a mensagem de carregamento do ID (não é mais necessário)
+            document.getElementById('user-info').textContent = 'Armazenamento: Progresso salvo localmente no seu navegador.';
+            document.getElementById('loading-message').style.display = 'none';
+        }
+
+        // Função para atualizar o status de uma tarefa no estado local e salvar
+        function updateTaskStatusLocal(taskId, currentStatus) {
+            const nextStatusKey = statusMap[currentStatus].next;
+            taskData[taskId] = { 
+                status: nextStatusKey, 
+                isPriority: taskData[taskId]?.isPriority || false 
+            };
+            saveTasksToStorage();
         }
         
-        async function handlePriorityToggle(taskId, currentPriority) {
-            if (!isAuthReady || !userId) return console.warn("Autenticação não concluída.");
-
+        // Função para alternar a prioridade de uma tarefa no estado local e salvar
+        function handlePriorityToggleLocal(taskId, currentPriority) {
             const nextPriority = !currentPriority;
-            const docRef = doc(getTaskCollectionRef(), taskId);
-
-            try {
-                await setDoc(docRef, { isPriority: nextPriority, timestamp: new Date().toISOString() }, { merge: true });
-                console.log(`Prioridade da tarefa ${taskId} atualizada para ${nextPriority}`);
-            } catch (e) {
-                console.error("Erro ao atualizar prioridade:", e);
-            }
-        }
-
-
-        async function loadTasks() {
-            if (!isAuthReady || !userId) return;
-
-            const collectionRef = getTaskCollectionRef();
-            
-            // 1. Carregar o estado atual das tarefas
-            const tasksRef = await getDocs(collectionRef);
-            const taskStatuses = {};
-            tasksRef.forEach(doc => {
-                const data = doc.data();
-                taskStatuses[doc.id] = { 
-                    status: data.status, 
-                    isPriority: data.isPriority || false 
-                };
-            });
-
-            // 2. Renderizar a estrutura e aplicar o estado
-            renderTracker(taskStatuses);
-
-            // 3. Configurar onSnapshot para atualizações em tempo real
-            onSnapshot(collectionRef, (snapshot) => {
-                const liveStatuses = {};
-                snapshot.forEach(doc => {
-                    const data = doc.data();
-                    liveStatuses[doc.id] = {
-                        status: data.status,
-                        isPriority: data.isPriority || false
-                    };
-                });
-                updateUI(liveStatuses);
-            }, (error) => {
-                console.error("Erro ao configurar onSnapshot:", error);
-            });
+            taskData[taskId] = { 
+                status: taskData[taskId]?.status || 'Pendente', 
+                isPriority: nextPriority 
+            };
+            saveTasksToStorage();
         }
 
         // --- Funções UI/Renderização ---
-        function renderTracker(taskStatuses) {
+        function renderTracker() {
             const container = document.getElementById('tracker-container');
             container.innerHTML = '';
             
@@ -271,7 +202,7 @@
                 const headerId = `header-${phase.phaseId}`;
                 const contentId = `content-${phase.phaseId}`;
                 
-                // Placeholder para o progresso da fase (será preenchido por updateUI)
+                // Estrutura da Fase
                 phaseElement.innerHTML += `
                     <button id="${headerId}" class="w-full text-left p-4 md:p-6 bg-gray-100 hover:bg-gray-200 transition duration-150 ease-in-out flex justify-between items-start rounded-t-xl" onclick="togglePhase('${contentId}', '${headerId}')">
                         <div>
@@ -290,24 +221,26 @@
                 `;
                 container.appendChild(phaseElement);
 
-                // Task List Rendering
+                // Task List Rendering - Mantendo o loop 'for' para evitar o erro de sintaxe do ambiente
                 const taskList = phaseElement.querySelector(`#task-list-${phase.phaseId}`);
-                phase.items.forEach((item, index) => {
-                    const taskId = `${phase.phaseId}-${index + 1}`;
-                    const initialStatus = taskStatuses[taskId] || { status: 'Pendente', isPriority: false };
+                
+                for (let i = 0; i < phase.items.length; i++) {
+                    const item = phase.items[i];
+                    const taskId = `${phase.phaseId}-${i + 1}`;
+                    const initialStatus = taskData[taskId] || { status: 'Pendente', isPriority: false };
                     
                     const taskItem = document.createElement('li');
                     taskItem.id = `task-item-${taskId}`;
                     taskItem.className = 'flex flex-col border-b border-gray-100 last:border-b-0 py-3';
                     taskItem.innerHTML = createTaskHTML(taskId, item.desc, initialStatus.status, initialStatus.isPriority, item.hint);
                     taskList.appendChild(taskItem);
-                });
+                }
             });
 
             // Adicionar funções ao escopo global para o onclick
             window.togglePhase = togglePhase;
-            window.handleStatusChange = (taskId, currentStatus) => updateTaskStatus(taskId, currentStatus);
-            window.handlePriorityToggle = (taskId, currentPriority) => handlePriorityToggle(taskId, currentPriority === 'true');
+            window.handleStatusChange = updateTaskStatusLocal;
+            window.handlePriorityToggle = handlePriorityToggleLocal;
             window.toggleTaskDetails = toggleTaskDetails;
         }
 
@@ -316,6 +249,7 @@
             const priorityColor = isPriority ? 'text-yellow-500' : 'text-gray-300';
             const detailsId = `details-${taskId}`;
 
+            // Passamos os valores atuais para as funções locais
             return `
                 <div class="flex items-start justify-between w-full mb-2">
                     <div class="flex items-center space-x-2">
@@ -324,7 +258,7 @@
                             id="priority-btn-${taskId}"
                             data-task-id="${taskId}"
                             data-is-priority="${isPriority}"
-                            onclick="handlePriorityToggle('${taskId}', '${isPriority}')"
+                            onclick="handlePriorityToggle('${taskId}', ${isPriority})"
                             class="priority-star focus:outline-none p-1 transition">
                             <svg class="w-5 h-5 ${priorityColor}" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path d="M9.049 2.927c.3-.921 1.691-.921 1.99 0l3.082 9.475a1 1 0 01-.842 1.488h-6.164a1 1 0 01-.842-1.488l3.082-9.475z"></path></svg>
                         </button>
@@ -358,7 +292,8 @@
             `;
         }
 
-        function updateUI(liveStatuses) {
+        // Esta função agora lê o estado global (taskData) e atualiza APENAS a UI
+        function updateUI() {
             let globalDone = 0;
             let globalTotal = 0;
 
@@ -366,47 +301,42 @@
                 let phaseDone = 0;
                 let phaseTotal = 0;
 
-                phase.items.forEach((item, index) => {
+                phase.items.forEach((item, index) => { 
                     const taskId = `${phase.phaseId}-${index + 1}`;
-                    const taskState = liveStatuses[taskId] || { status: 'Pendente', isPriority: false };
+                    const taskState = taskData[taskId] || { status: 'Pendente', isPriority: false };
                     
                     const newStatus = taskState.status;
                     const newPriority = taskState.isPriority;
                     
                     const statusInfo = statusMap[newStatus] || statusMap['Pendente'];
-                    const priorityColor = newPriority ? 'text-yellow-500' : 'text-gray-300';
                     
                     const statusButton = document.getElementById(`status-btn-${taskId}`);
                     const priorityButton = document.getElementById(`priority-btn-${taskId}`);
 
                     // 1. Atualizar Status Button
                     if (statusButton) {
-                        const currentStatus = statusButton.getAttribute('data-status');
-                        if (currentStatus !== newStatus) {
-                            Object.values(statusMap).forEach(info => {
-                                statusButton.classList.remove(info.color);
-                            });
-                            statusButton.setAttribute('data-status', newStatus);
-                            statusButton.setAttribute('onclick', `handleStatusChange('${taskId}', '${newStatus}')`);
-                            statusButton.classList.add(statusInfo.color);
-                            statusButton.innerHTML = `${statusInfo.icon} ${newStatus}`;
-                        }
+                        // Atualiza a classe e o texto do botão
+                        Object.values(statusMap).forEach(info => {
+                            statusButton.classList.remove(info.color);
+                        });
+                        statusButton.setAttribute('data-status', newStatus);
+                        statusButton.setAttribute('onclick', `handleStatusChange('${taskId}', '${newStatus}')`);
+                        statusButton.classList.add(statusInfo.color);
+                        statusButton.innerHTML = `${statusInfo.icon} ${newStatus}`;
                     }
 
                     // 2. Atualizar Priority Button
                     if (priorityButton) {
-                        const currentPriority = priorityButton.getAttribute('data-is-priority');
-                        if (currentPriority !== String(newPriority)) {
-                            priorityButton.setAttribute('data-is-priority', newPriority);
-                            priorityButton.setAttribute('onclick', `handlePriorityToggle('${taskId}', '${newPriority}')`);
-                            if (newPriority) {
-                                priorityButton.children[0].classList.add('text-yellow-500');
-                                priorityButton.children[0].classList.remove('text-gray-300');
-                            } else {
-                                priorityButton.children[0].classList.remove('text-yellow-500');
-                                priorityButton.children[0].classList.add('text-gray-300');
-                            }
+                        const prioritySvg = priorityButton.children[0];
+                        if (newPriority) {
+                            prioritySvg.classList.add('text-yellow-500');
+                            prioritySvg.classList.remove('text-gray-300');
+                        } else {
+                            prioritySvg.classList.remove('text-yellow-500');
+                            prioritySvg.classList.add('text-gray-300');
                         }
+                        priorityButton.setAttribute('data-is-priority', newPriority);
+                        priorityButton.setAttribute('onclick', `handlePriorityToggle('${taskId}', ${newPriority})`);
                     }
                     
                     // 3. Contar Progresso
@@ -469,7 +399,7 @@
             details.classList.toggle('hidden');
         }
 
-        window.onload = initializeFirebase;
+        window.onload = initializeApp;
     </script>
 </head>
 <body class="bg-gray-50 min-h-screen font-sans">
@@ -479,8 +409,8 @@
         <!-- Header Principal -->
         <header class="mb-8">
             <h1 class="text-3xl md:text-4xl font-extrabold text-gray-900 mb-2">Plano Mestre: O Gerenciador de Fases</h1>
-            <p class="text-gray-600 text-lg">Acompanhe o desenvolvimento e a efetivação das 9 fases de transformação da sua loja. </p>
-            <p id="user-info" class="text-xs text-gray-400 mt-2">A carregar ID do Utilizador...</p>
+            <p class="text-gray-600 text-lg">Acompanhe o desenvolvimento e a efetivação das 9 fases de transformação da sua loja.</p>
+            <p id="user-info" class="text-xs text-gray-400 mt-2">A carregar...</p>
         </header>
 
         <!-- Resumo do Progresso -->
@@ -492,11 +422,12 @@
                     <div id="progress-bar-fill" class="h-3 rounded-full transition-all duration-500 ease-in-out bg-blue-600" style="width: 0%"></div>
                 </div>
             </div>
+            <p id="loading-message" class="text-center text-gray-500 mt-4 text-sm hidden">A carregar dados...</p>
         </section>
 
         <!-- Container do Tracker -->
         <section id="tracker-container">
-            <p class="text-center text-gray-500 mt-10">A carregar dados e autenticação Firebase...</p>
+            <p class="text-center text-gray-500 mt-10">A carregar a estrutura do Plano Mestre...</p>
         </section>
 
         <!-- Footer Simples -->
