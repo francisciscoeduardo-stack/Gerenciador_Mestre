@@ -36,7 +36,7 @@
             'Concluído': { color: 'bg-green-500', next: 'Pendente', icon: '🟢' },
         };
 
-        // Estrutura do Plano Mestre (a mesma, mas sem referências a IDs de utilizador)
+        // Estrutura do Plano Mestre
         const projectData = [
             {
                 phaseId: 'F1', title: 'Pilar I: Fundação de Dados e Ferramentas (Fase 1)', items: [
@@ -128,11 +128,11 @@
 
         // --- Funções de Armazenamento Local ---
         
-        // Salva o estado atual de todas as tarefas no localStorage
+        // Salva o estado atual de todas as tarefas no localStorage E ATUALIZA A UI
         function saveTasksToStorage() {
             try {
                 localStorage.setItem(STORAGE_KEY, JSON.stringify(taskData));
-                updateUI(); // Atualiza a UI após salvar
+                updateUI(); // ESSENCIAL: Garante que a interface é atualizada após a mudança
             } catch (e) {
                 console.error("Erro ao salvar no localStorage:", e);
             }
@@ -156,16 +156,10 @@
         // --- Funções de Lógica da Aplicação ---
 
         function initializeApp() {
-            // Carrega os dados persistentes
             loadTasksFromStorage();
-
-            // Renderiza a estrutura da aplicação com os dados carregados
             renderTracker();
-            
-            // Inicializa o resumo de progresso
             updateUI();
             
-            // Remove a mensagem de carregamento do ID (não é mais necessário)
             document.getElementById('user-info').textContent = 'Armazenamento: Progresso salvo localmente no seu navegador.';
             document.getElementById('loading-message').style.display = 'none';
         }
@@ -181,8 +175,12 @@
         }
         
         // Função para alternar a prioridade de uma tarefa no estado local e salvar
-        function handlePriorityToggleLocal(taskId, currentPriority) {
+        // AGORA APENAS RECEBE O taskId, lendo o estado atual do DOM ou do taskData
+        function handlePriorityToggleLocal(taskId) {
+            // Se o taskId não existir, inicializa com Pendente e false
+            const currentPriority = taskData[taskId]?.isPriority || false; 
             const nextPriority = !currentPriority;
+            
             taskData[taskId] = { 
                 status: taskData[taskId]?.status || 'Pendente', 
                 isPriority: nextPriority 
@@ -221,7 +219,7 @@
                 `;
                 container.appendChild(phaseElement);
 
-                // Task List Rendering - Mantendo o loop 'for' para evitar o erro de sintaxe do ambiente
+                // Task List Rendering - Loop 'for' para máxima compatibilidade
                 const taskList = phaseElement.querySelector(`#task-list-${phase.phaseId}`);
                 
                 for (let i = 0; i < phase.items.length; i++) {
@@ -240,7 +238,7 @@
             // Adicionar funções ao escopo global para o onclick
             window.togglePhase = togglePhase;
             window.handleStatusChange = updateTaskStatusLocal;
-            window.handlePriorityToggle = handlePriorityToggleLocal;
+            window.handlePriorityToggle = handlePriorityToggleLocal; // Função simplificada
             window.toggleTaskDetails = toggleTaskDetails;
         }
 
@@ -249,16 +247,15 @@
             const priorityColor = isPriority ? 'text-yellow-500' : 'text-gray-300';
             const detailsId = `details-${taskId}`;
 
-            // Passamos os valores atuais para as funções locais
             return `
                 <div class="flex items-start justify-between w-full mb-2">
                     <div class="flex items-center space-x-2">
-                        <!-- Priority Button -->
+                        <!-- Priority Button: Agora só precisa do taskId -->
                         <button 
                             id="priority-btn-${taskId}"
                             data-task-id="${taskId}"
                             data-is-priority="${isPriority}"
-                            onclick="handlePriorityToggle('${taskId}', ${isPriority})"
+                            onclick="handlePriorityToggle('${taskId}')"
                             class="priority-star focus:outline-none p-1 transition">
                             <svg class="w-5 h-5 ${priorityColor}" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path d="M9.049 2.927c.3-.921 1.691-.921 1.99 0l3.082 9.475a1 1 0 01-.842 1.488h-6.164a1 1 0 01-.842-1.488l3.082-9.475z"></path></svg>
                         </button>
@@ -292,7 +289,7 @@
             `;
         }
 
-        // Esta função agora lê o estado global (taskData) e atualiza APENAS a UI
+        // Esta função lê o estado global (taskData) e atualiza APENAS a UI
         function updateUI() {
             let globalDone = 0;
             let globalTotal = 0;
@@ -315,7 +312,7 @@
 
                     // 1. Atualizar Status Button
                     if (statusButton) {
-                        // Atualiza a classe e o texto do botão
+                        // Limpa classes e define as novas
                         Object.values(statusMap).forEach(info => {
                             statusButton.classList.remove(info.color);
                         });
@@ -335,8 +332,10 @@
                             prioritySvg.classList.remove('text-yellow-500');
                             prioritySvg.classList.add('text-gray-300');
                         }
+                        // Atualiza o atributo data-is-priority, mesmo que não seja lido
                         priorityButton.setAttribute('data-is-priority', newPriority);
-                        priorityButton.setAttribute('onclick', `handlePriorityToggle('${taskId}', ${newPriority})`);
+                        // Simplifica o onclick:
+                        priorityButton.setAttribute('onclick', `handlePriorityToggle('${taskId}')`);
                     }
                     
                     // 3. Contar Progresso
@@ -409,7 +408,7 @@
         <!-- Header Principal -->
         <header class="mb-8">
             <h1 class="text-3xl md:text-4xl font-extrabold text-gray-900 mb-2">Plano Mestre: O Gerenciador de Fases</h1>
-            <p class="text-gray-600 text-lg">Acompanhe o desenvolvimento e a efetivação das 9 fases de transformação da sua loja.</p>
+            <p class="text-gray-600 text-lg">Acompanhe o desenvolvimento e a efetivação das 9 fases de transformação da sua loja. </p>
             <p id="user-info" class="text-xs text-gray-400 mt-2">A carregar...</p>
         </header>
 
