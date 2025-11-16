@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciador de Fases do Plano Mestre</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for better aesthetics */
+        .rotate-90 {
+            transform: rotate(90deg);
+        }
+        .priority-star {
+            transition: color 0.2s;
+        }
+        .phase-progress-bar {
+            height: 6px;
+            border-radius: 9999px;
+            background-color: #d1d5db; /* gray-300 */
+            overflow: hidden;
+            margin-top: 8px;
+        }
+        .phase-progress-fill {
+            height: 100%;
+            transition: width 0.5s ease-in-out;
+        }
+    </style>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, setDoc, collection, getDocs, runTransaction, query, where, writeBatch, getDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Configuração inicial do Firebase (Variáveis Globais do Canvas)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        let db;
+        let auth;
+        let userId = null;
+        let isAuthReady = false;
+
+        // setLogLevel('debug'); // Ativa logs do Firestore (opcional)
+
+        const statusMap = {
+            'Pendente': { color: 'bg-gray-500', next: 'Em Andamento', icon: '⚪️' },
+            'Em Andamento': { color: 'bg-blue-500', next: 'Concluído', icon: '🟡' },
+            'Concluído': { color: 'bg-green-500', next: 'Pendente', icon: '🟢' },
+        };
+
+        // Estrutura do Plano Mestre (Baseada no Markdown)
+        const projectData = [
+            {
+                phaseId: 'F1', title: 'Pilar I: Fundação de Dados e Ferramentas (Fase 1)', items: [
+                    { desc: 'Microsoft Excel/Sheets (Base de Dados Mestre)', hint: 'Definir estrutura das colunas: SKU, Custo, Preço, Stock, Data de Entrada.' },
+                    { desc: 'Microsoft Power BI (Dashboard Central)', hint: 'Conectar o Power BI ao Excel/Sheets e criar o primeiro visual de "Vendas por Mês".' },
+                    { desc: 'Google Analytics 4 (GA4)', hint: 'Instalar o código do GA4 no site e configurar eventos de "Compra" e "Adicionar ao Carrinho".' },
+                    { desc: 'Hotjar/Clarity', hint: 'Instalar o código e gravar as primeiras 100 sessões de utilizadores móveis.' },
+                    { desc: 'Zapier/Make (Integromat)', hint: 'Criar a primeira automação: mover novos leads do Quiz (Fase 3) para o Google Sheets.' },
+                    { desc: 'Custom GPT/Gem (SEO/Atendimento)', hint: 'Criar o "Sistema Prompt" do GPT para descrições de produto, focando em palavras-chave.' },
+                    { desc: 'Plataforma de E-commerce', hint: 'Rever as configurações de frete e métodos de pagamento para todo o Brasil.' },
+                    { desc: 'Facebook/Instagram Ads', hint: 'Configurar o Pixel de Remarketing e criar o primeiro Público Personalizado.' },
+                    { desc: 'Melhor Envio/Frenet', hint: 'Integrar a API de cotação de frete na página de checkout.' },
+                    { desc: 'AppSheet/Glide', hint: 'Criar um esqueleto básico para o primeiro micro app (Inventário ou Checklist).' },
+                ]
+            },
+            {
+                phaseId: 'F2', title: 'Pilar II A: 5 Projetos Estruturais (Fase 2)', items: [
+                    { desc: 'Micro SaaS: Mestre de Stock & Reabastecimento', hint: 'Definir o Ponto de Reordenamento (Safety Stock) no Excel.' },
+                    { desc: 'Custom GPT: Personal Stylist para Sapatos', hint: 'Treinar o GPT com 50 combinações de sapatos e roupas de amostra.' },
+                    { desc: 'App: Captura de Leads e Segmentação Offline', hint: 'Desenhar o layout da App com 3 campos essenciais: E-mail, Estilo Preferido, Tamanho.' },
+                    { desc: 'Power BI: Dashboard de Precificação e Margem Bruta', hint: 'Importar a coluna de "Custo" para o Power BI e calcular a margem bruta por SKU.' },
+                    { desc: 'Micro SaaS: Portal de Tracking e Feedback', hint: 'Criar um template de e-mail de "Avaliação" para enviar 2 dias após a entrega.' },
+                ]
+            },
+            {
+                phaseId: 'F4', title: 'Pilar II B: 5 Otimizações de Processo (Fase 4)', items: [
+                    { desc: 'Protocolo: Checklist de Novo Produto no Excel', hint: 'Documentar os 10 passos obrigatórios antes de um novo sapato ir para o site.' },
+                    { desc: 'Manual: Fluxo de Imagens Otimizado', hint: 'Adotar um padrão de nomeação de ficheiros de imagem (Ex: SKU_vista_frontal.jpg).' },
+                    { desc: 'Micro App de Inventário e Recebimento', hint: 'Adicionar funcionalidade de escaneamento de código de barras (simulada) no AppSheet.' },
+                    { desc: 'Guia Rápido: 5 Passos para Respostas de Atendimento ao Cliente', hint: 'Definir as 5 principais objeções e as respostas padronizadas.' },
+                    { desc: 'Protocolo: Ação de Vendas por Feedback Negativo', hint: 'Criar um fluxo para oferecer um desconto de 15% após uma reclamação resolvida.' },
+                ]
+            },
+            {
+                phaseId: 'F5', title: 'Pilar II C: 5 Micro Apps para Nicho (Fase 5)', items: [
+                    { desc: 'Calculadora de Tamanho Perfeito', hint: 'Mapear a tabela de tamanhos do Brasil vs. EUA/Europa e adicionar a lógica de conversão.' },
+                    { desc: 'Custom GPT: Assistente de Previsão de Demanda', hint: 'Rodar a primeira previsão para os 3 modelos Top Seller e comparar com o stock atual.' },
+                    { desc: 'App: Controlo de Qualidade no Recebimento', hint: 'Criar um campo "Motivo de Defeito" na App com opções pré-definidas.' },
+                    { desc: 'Gerador de Tags e Hashtags SEO/Redes Sociais', hint: 'Testar o GPT com 5 produtos diferentes para gerar títulos otimizados.' },
+                    { desc: 'Gerador de Títulos de Promoção com Escassez', hint: 'Criar 3 templates de títulos que usem a variável "Stock Baixo" (do Excel).' },
+                ]
+            },
+            {
+                phaseId: 'F3', title: 'Pilar III A: 5 Campanhas Táticas de Vendas (Fase 3)', items: [
+                    { desc: 'Campanha Adapte-se ao Clima', hint: 'Identificar 3 cidades com clima extremo (frio ou calor) e criar anúncios específicos.' },
+                    { desc: 'Campanha Remarketing Dinâmico', hint: 'Configurar a exibição de 3 produtos relacionados no anúncio dinâmico.' },
+                    { desc: 'Campanha RFM de Aniversário', hint: 'Integrar a data de nascimento do cliente no sistema de e-mail marketing.' },
+                    { desc: 'Campanha Geração de Leads por Quiz', hint: 'Criar o Quiz com 4 perguntas e um resultado personalizado por estilo.' },
+                    { desc: 'Campanha Pós-Compra Inteligente', hint: 'Escrever a sequência de 3 e-mails pós-compra (Ex: Agradecimento, Review, Limpeza).' },
+                ]
+            },
+            {
+                phaseId: 'F6', title: 'Pilar III B: 5 Pontos de Refinamento de UX/Layout (Fase 6)', items: [
+                    { desc: 'Otimização da Barra de Pesquisa e Filtros', hint: 'Implementar os filtros de "Ocasião" e "Material" no e-commerce.' },
+                    { desc: 'Layout Otimizado (Mobile First)', hint: 'Mover o botão "Comprar" para logo abaixo da galeria de imagens no mobile.' },
+                    { desc: 'Integração de Prova Social e Confiança', hint: 'Instalar o widget de avaliações na página inicial e de produto.' },
+                    { desc: 'Otimização do Checkout', hint: 'Remover o passo de "Criar Conta" e substituir por "Checkout de Convidado".' },
+                    { desc: 'Testes A/B de Layouts', hint: 'Executar o primeiro teste A/B: Botão Vermelho vs. Azul no produto mais vendido.' },
+                ]
+            },
+            {
+                phaseId: 'F7', title: 'Pilar III C: 5 Estratégias de Precificação Detalhada (Fase 7)', items: [
+                    { desc: 'Lógica de Preço de "Queima de Stock"', hint: 'Criar a fórmula no Excel para identificar automaticamente o stock > 90 dias.' },
+                    { desc: 'Lógica de Preço de "Oportunidade"', hint: 'Definir o limite de "Stock Crítico" que aciona o aumento de 5% no preço.' },
+                    { desc: 'Precificação Geográfica', hint: 'Lançar uma micro-campanha de anúncios para 2 estados com preços ligeiramente diferentes.' },
+                    { desc: 'Análise de Custo-Benefício de Descontos', hint: 'Compilar dados históricos de promoções de "Frete Grátis" vs. "Desconto %".' },
+                    { desc: 'Análise de Precificação por Concorrência', hint: 'Identificar 3 produtos equivalentes em 3 concorrentes e registar os preços iniciais.' },
+                ]
+            },
+            {
+                phaseId: 'F8', title: 'Pilar IV A: 5 Automações Avançadas do Power BI (Fase 8)', items: [
+                    { desc: 'Relatórios de Alerta de Anomalias', hint: 'Configurar a regra de alerta no Power BI: Vendas < 70% da média dos últimos 7 dias.' },
+                    { desc: 'Integração de Dados do CRM/Leads', hint: 'Ligar o Google Sheets de leads ao Power BI para rastrear a conversão.' },
+                    { desc: 'Dashboard de Análise de Devoluções e Reclamações', hint: 'Criar os primeiros visuais mostrando o Motivo e o Custo por Devolução.' },
+                    { desc: 'Análise de Sazonalidade e Tendências (Preditiva)', hint: 'Usar as ferramentas de previsão do Power BI no relatório de vendas anuais.' },
+                    { desc: 'Acesso Móvel Simples', hint: 'Designar um layout do dashboard com apenas 3 cartões grandes para a App Mobile.' },
+                ]
+            },
+            {
+                phaseId: 'F9', title: 'Pilar IV B: 5 Estratégias de Parcerias e Escala Nacional (Fase 9)', items: [
+                    { desc: 'Portal de Afiliados Simples (Micro SaaS)', hint: 'Criar a tabela de comissões (Ex: 10% sobre o valor da venda) no Excel.' },
+                    { desc: 'Estratégia de Parceria com Micro-Influencers Regionais', hint: 'Fazer uma lista de 10 perfis no Instagram de 2 estados do Nordeste e 2 do Sul.' },
+                    { desc: 'Estrutura de Drop-Shipping para Lojistas Menores', hint: 'Definir a política de preço de atacado (Ex: Custo + 20% + Frete).' },
+                    { desc: 'Otimização para Marketplaces (e.g., Mercado Livre)', hint: 'Criar a conta no Bling/Tiny e ligar ao Mercado Livre.' },
+                    { desc: '"Venda por Catálogo Digital" com WhatsApp', hint: 'Estruturar o Catálogo do WhatsApp Business com as 10 melhores fotos.' },
+                ]
+            }
+        ];
+
+        // --- Funções Firebase ---
+        async function initializeFirebase() {
+            if (!firebaseConfig) {
+                console.error("Firebase config is missing.");
+                document.getElementById('tracker-container').innerHTML = '<p class="text-red-500 p-4">Erro: Configuração do Firebase não encontrada.</p>';
+                return;
+            }
+
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                await new Promise(resolve => {
+                    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+                        if (user) {
+                            userId = user.uid;
+                        } else if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken).catch(e => {
+                                console.error("Erro ao iniciar sessão com token personalizado:", e);
+                            });
+                            // Re-check auth state after custom sign-in attempt
+                            onAuthStateChanged(auth, (user) => {
+                                if (user) {
+                                    userId = user.uid;
+                                } else {
+                                    signInAnonymously(auth).then(cred => userId = cred.user.uid);
+                                }
+                            });
+                        } else {
+                            await signInAnonymously(auth).then(cred => userId = cred.user.uid);
+                        }
+                        
+                        isAuthReady = true;
+                        unsubscribe();
+                        resolve();
+                    });
+                });
+
+                if (userId) {
+                    document.getElementById('user-info').textContent = `ID do Utilizador: ${userId}`;
+                    console.log(`Autenticação concluída. User ID: ${userId}`);
+                    loadTasks();
+                } else {
+                    document.getElementById('tracker-container').innerHTML = '<p class="text-red-500 p-4">Erro: Não foi possível obter o User ID após a autenticação.</p>';
+                }
+
+            } catch (e) {
+                console.error("Erro ao inicializar Firebase:", e);
+                document.getElementById('tracker-container').innerHTML = '<p class="text-red-500 p-4">Erro ao inicializar Firebase. Verifique a consola.</p>';
+            }
+        }
+
+        function getTaskCollectionRef() {
+            return collection(db, `artifacts/${appId}/users/${userId}/plano_mestre_loja_sapatos_tasks`);
+        }
+
+        async function updateTaskStatus(taskId, currentStatus) {
+            if (!isAuthReady || !userId) return console.warn("Autenticação não concluída.");
+
+            const nextStatusKey = statusMap[currentStatus].next;
+            const docRef = doc(getTaskCollectionRef(), taskId);
+            
+            try {
+                await setDoc(docRef, { status: nextStatusKey, timestamp: new Date().toISOString() }, { merge: true });
+                console.log(`Status da tarefa ${taskId} atualizado para ${nextStatusKey}`);
+            } catch (e) {
+                console.error("Erro ao atualizar status:", e);
+            }
+        }
+        
+        async function handlePriorityToggle(taskId, currentPriority) {
+            if (!isAuthReady || !userId) return console.warn("Autenticação não concluída.");
+
+            const nextPriority = !currentPriority;
+            const docRef = doc(getTaskCollectionRef(), taskId);
+
+            try {
+                await setDoc(docRef, { isPriority: nextPriority, timestamp: new Date().toISOString() }, { merge: true });
+                console.log(`Prioridade da tarefa ${taskId} atualizada para ${nextPriority}`);
+            } catch (e) {
+                console.error("Erro ao atualizar prioridade:", e);
+            }
+        }
+
+
+        async function loadTasks() {
+            if (!isAuthReady || !userId) return;
+
+            const collectionRef = getTaskCollectionRef();
+            
+            // 1. Carregar o estado atual das tarefas
+            const tasksRef = await getDocs(collectionRef);
+            const taskStatuses = {};
+            tasksRef.forEach(doc => {
+                const data = doc.data();
+                taskStatuses[doc.id] = { 
+                    status: data.status, 
+                    isPriority: data.isPriority || false 
+                };
+            });
+
+            // 2. Renderizar a estrutura e aplicar o estado
+            renderTracker(taskStatuses);
+
+            // 3. Configurar onSnapshot para atualizações em tempo real
+            onSnapshot(collectionRef, (snapshot) => {
+                const liveStatuses = {};
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    liveStatuses[doc.id] = {
+                        status: data.status,
+                        isPriority: data.isPriority || false
+                    };
+                });
+                updateUI(liveStatuses);
+            }, (error) => {
+                console.error("Erro ao configurar onSnapshot:", error);
+            });
+        }
+
+        // --- Funções UI/Renderização ---
+        function renderTracker(taskStatuses) {
+            const container = document.getElementById('tracker-container');
+            container.innerHTML = '';
+            
+            projectData.forEach(phase => {
+                const phaseElement = document.createElement('div');
+                phaseElement.className = 'bg-white shadow-xl rounded-xl mb-6 overflow-hidden';
+                
+                const headerId = `header-${phase.phaseId}`;
+                const contentId = `content-${phase.phaseId}`;
+                
+                // Placeholder para o progresso da fase (será preenchido por updateUI)
+                phaseElement.innerHTML += `
+                    <button id="${headerId}" class="w-full text-left p-4 md:p-6 bg-gray-100 hover:bg-gray-200 transition duration-150 ease-in-out flex justify-between items-start rounded-t-xl" onclick="togglePhase('${contentId}', '${headerId}')">
+                        <div>
+                            <h2 class="text-lg md:text-xl font-bold text-gray-800">${phase.title}</h2>
+                            <div class="phase-progress-bar">
+                                <div id="phase-progress-fill-${phase.phaseId}" class="phase-progress-fill bg-blue-500" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <span class="text-gray-600 transform transition-transform duration-300 ml-4 mt-1" id="icon-${headerId}">▶️</span>
+                    </button>
+                    <div id="${contentId}" class="p-4 md:p-6 space-y-3 hidden">
+                        <ul id="task-list-${phase.phaseId}" class="list-none space-y-4">
+                            <!-- Tasks will be rendered here -->
+                        </ul>
+                    </div>
+                `;
+                container.appendChild(phaseElement);
+
+                // Task List Rendering
+                const taskList = phaseElement.querySelector(`#task-list-${phase.phaseId}`);
+                phase.items.forEach((item, index) => {
+                    const taskId = `${phase.phaseId}-${index + 1}`;
+                    const initialStatus = taskStatuses[taskId] || { status: 'Pendente', isPriority: false };
+                    
+                    const taskItem = document.createElement('li');
+                    taskItem.id = `task-item-${taskId}`;
+                    taskItem.className = 'flex flex-col border-b border-gray-100 last:border-b-0 py-3';
+                    taskItem.innerHTML = createTaskHTML(taskId, item.desc, initialStatus.status, initialStatus.isPriority, item.hint);
+                    taskList.appendChild(taskItem);
+                });
+            });
+
+            // Adicionar funções ao escopo global para o onclick
+            window.togglePhase = togglePhase;
+            window.handleStatusChange = (taskId, currentStatus) => updateTaskStatus(taskId, currentStatus);
+            window.handlePriorityToggle = (taskId, currentPriority) => handlePriorityToggle(taskId, currentPriority === 'true');
+            window.toggleTaskDetails = toggleTaskDetails;
+        }
+
+        function createTaskHTML(taskId, description, status, isPriority, hint) {
+            const statusInfo = statusMap[status] || statusMap['Pendente'];
+            const priorityColor = isPriority ? 'text-yellow-500' : 'text-gray-300';
+            const detailsId = `details-${taskId}`;
+
+            return `
+                <div class="flex items-start justify-between w-full mb-2">
+                    <div class="flex items-center space-x-2">
+                        <!-- Priority Button -->
+                        <button 
+                            id="priority-btn-${taskId}"
+                            data-task-id="${taskId}"
+                            data-is-priority="${isPriority}"
+                            onclick="handlePriorityToggle('${taskId}', '${isPriority}')"
+                            class="priority-star focus:outline-none p-1 transition">
+                            <svg class="w-5 h-5 ${priorityColor}" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path d="M9.049 2.927c.3-.921 1.691-.921 1.99 0l3.082 9.475a1 1 0 01-.842 1.488h-6.164a1 1 0 01-.842-1.488l3.082-9.475z"></path></svg>
+                        </button>
+                        <span class="text-gray-700 font-medium">${description}</span>
+                    </div>
+
+                    <div class="flex items-center space-x-2 flex-shrink-0 ml-4">
+                        <!-- Hint/Action Button -->
+                        <button 
+                            onclick="toggleTaskDetails('${detailsId}')"
+                            class="text-gray-500 hover:text-blue-500 p-1 rounded-full transition duration-150 ease-in-out">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        </button>
+
+                        <!-- Status Button -->
+                        <button 
+                            id="status-btn-${taskId}"
+                            data-task-id="${taskId}"
+                            data-status="${status}"
+                            onclick="handleStatusChange('${taskId}', '${status}')"
+                            class="py-1 px-3 text-xs font-semibold rounded-full text-white transition duration-200 ease-in-out ${statusInfo.color} hover:opacity-80 shadow-md">
+                            ${statusInfo.icon} ${status}
+                        </button>
+                    </div>
+                </div>
+                <!-- Task Details/Hint -->
+                <div id="${detailsId}" class="bg-blue-50 border-l-4 border-blue-400 p-3 mt-2 rounded-lg text-sm text-blue-800 hidden w-full">
+                    <p class="font-bold mb-1">Próxima Ação Sugerida:</p>
+                    <p>${hint}</p>
+                </div>
+            `;
+        }
+
+        function updateUI(liveStatuses) {
+            let globalDone = 0;
+            let globalTotal = 0;
+
+            projectData.forEach(phase => {
+                let phaseDone = 0;
+                let phaseTotal = 0;
+
+                phase.items.forEach((item, index) => {
+                    const taskId = `${phase.phaseId}-${index + 1}`;
+                    const taskState = liveStatuses[taskId] || { status: 'Pendente', isPriority: false };
+                    
+                    const newStatus = taskState.status;
+                    const newPriority = taskState.isPriority;
+                    
+                    const statusInfo = statusMap[newStatus] || statusMap['Pendente'];
+                    const priorityColor = newPriority ? 'text-yellow-500' : 'text-gray-300';
+                    
+                    const statusButton = document.getElementById(`status-btn-${taskId}`);
+                    const priorityButton = document.getElementById(`priority-btn-${taskId}`);
+
+                    // 1. Atualizar Status Button
+                    if (statusButton) {
+                        const currentStatus = statusButton.getAttribute('data-status');
+                        if (currentStatus !== newStatus) {
+                            Object.values(statusMap).forEach(info => {
+                                statusButton.classList.remove(info.color);
+                            });
+                            statusButton.setAttribute('data-status', newStatus);
+                            statusButton.setAttribute('onclick', `handleStatusChange('${taskId}', '${newStatus}')`);
+                            statusButton.classList.add(statusInfo.color);
+                            statusButton.innerHTML = `${statusInfo.icon} ${newStatus}`;
+                        }
+                    }
+
+                    // 2. Atualizar Priority Button
+                    if (priorityButton) {
+                        const currentPriority = priorityButton.getAttribute('data-is-priority');
+                        if (currentPriority !== String(newPriority)) {
+                            priorityButton.setAttribute('data-is-priority', newPriority);
+                            priorityButton.setAttribute('onclick', `handlePriorityToggle('${taskId}', '${newPriority}')`);
+                            if (newPriority) {
+                                priorityButton.children[0].classList.add('text-yellow-500');
+                                priorityButton.children[0].classList.remove('text-gray-300');
+                            } else {
+                                priorityButton.children[0].classList.remove('text-yellow-500');
+                                priorityButton.children[0].classList.add('text-gray-300');
+                            }
+                        }
+                    }
+                    
+                    // 3. Contar Progresso
+                    phaseTotal++;
+                    globalTotal++;
+                    if (newStatus === 'Concluído') {
+                        phaseDone++;
+                        globalDone++;
+                    }
+                });
+                
+                // 4. Atualizar Progresso da Fase
+                const phaseProgress = phaseTotal > 0 ? Math.round((phaseDone / phaseTotal) * 100) : 0;
+                const phaseProgressBar = document.getElementById(`phase-progress-fill-${phase.phaseId}`);
+                if (phaseProgressBar) {
+                    phaseProgressBar.style.width = `${phaseProgress}%`;
+                    phaseProgressBar.classList.toggle('bg-green-500', phaseProgress === 100);
+                    phaseProgressBar.classList.toggle('bg-blue-500', phaseProgress < 100);
+                }
+            });
+
+            // 5. Atualizar Progresso Global
+            updateProgressSummary(globalDone, globalTotal);
+        }
+
+        function updateProgressSummary(doneTasks, totalTasks) {
+            const progress = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+
+            const progressText = document.getElementById('progress-text');
+            const progressBar = document.getElementById('progress-bar-fill');
+
+            progressText.textContent = `${doneTasks} de ${totalTasks} Tarefas Concluídas (${progress}%)`;
+            progressBar.style.width = `${progress}%`;
+
+            if (progress === 100) {
+                progressBar.classList.add('bg-green-600');
+                progressBar.classList.remove('bg-blue-600');
+            } else {
+                progressBar.classList.remove('bg-green-600');
+                progressBar.classList.add('bg-blue-600');
+            }
+        }
+
+        function togglePhase(contentId, headerId) {
+            const content = document.getElementById(contentId);
+            const icon = document.getElementById(`icon-${headerId}`);
+            
+            if (content.classList.contains('hidden')) {
+                content.classList.remove('hidden');
+                icon.classList.add('rotate-90');
+                icon.classList.remove('rotate-0');
+            } else {
+                content.classList.add('hidden');
+                icon.classList.remove('rotate-90');
+            }
+        }
+
+        function toggleTaskDetails(detailsId) {
+            const details = document.getElementById(detailsId);
+            details.classList.toggle('hidden');
+        }
+
+        window.onload = initializeFirebase;
+    </script>
+</head>
+<body class="bg-gray-50 min-h-screen font-sans">
+
+    <div class="container mx-auto p-4 md:p-8 max-w-4xl">
+        
+        <!-- Header Principal -->
+        <header class="mb-8">
+            <h1 class="text-3xl md:text-4xl font-extrabold text-gray-900 mb-2">Plano Mestre: O Gerenciador de Fases</h1>
+            <p class="text-gray-600 text-lg">Acompanhe o desenvolvimento e a efetivação das 9 fases de transformação da sua loja. </p>
+            <p id="user-info" class="text-xs text-gray-400 mt-2">A carregar ID do Utilizador...</p>
+        </header>
+
+        <!-- Resumo do Progresso -->
+        <section class="bg-white p-6 md:p-8 rounded-xl shadow-lg mb-8 border border-blue-200">
+            <h2 class="text-2xl font-bold text-gray-700 mb-4">Progresso Geral</h2>
+            <div class="space-y-3">
+                <p id="progress-text" class="text-xl font-mono text-gray-800">A carregar progresso...</p>
+                <div class="w-full bg-gray-200 rounded-full h-3">
+                    <div id="progress-bar-fill" class="h-3 rounded-full transition-all duration-500 ease-in-out bg-blue-600" style="width: 0%"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Container do Tracker -->
+        <section id="tracker-container">
+            <p class="text-center text-gray-500 mt-10">A carregar dados e autenticação Firebase...</p>
+        </section>
+
+        <!-- Footer Simples -->
+        <footer class="text-center text-gray-400 mt-10 p-4">
+            <p>Arquitetura de Dados: Excel/Sheets → Apps/Gems → Power BI (Decisão)</p>
+        </footer>
+    </div>
+
+</body>
+</html>
